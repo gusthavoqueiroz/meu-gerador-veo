@@ -31,7 +31,7 @@ if st.button("Gerar Prompts") and audio_file and oa_key and cl_key:
                 response_format="text"
             )
 
-        # 2. Criação da Tabela com Claude (Usando ID de modelo fixo)
+        # 2. Criação da Tabela com Claude Haiku (Mais compatível e rápido)
         st.info("⌛ Claude criando tabela...")
         client_cl = anthropic.Anthropic(api_key=cl_key)
         
@@ -46,12 +46,12 @@ if st.button("Gerar Prompts") and audio_file and oa_key and cl_key:
         Formate como Tabela: Tempo | Texto Original | Prompt Veo 3"""
 
         message = client_cl.messages.create(
-            model="claude-3-5-sonnet-20241022", # NOME FIXO PARA EVITAR ERRO 404
+            model="claude-3-haiku-20240307", # MODELO ULTRA COMPATÍVEL
             max_tokens=4000,
             messages=[{"role": "user", "content": prompt_final}]
         )
 
-        st.success("✅ Tudo pronto!")
+        st.success("✅ Finalmente pronto!")
         st.markdown(message.content[0].text)
 
     except Exception as e:
