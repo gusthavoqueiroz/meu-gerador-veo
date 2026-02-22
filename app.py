@@ -3,10 +3,10 @@ import openai
 import anthropic
 import os
 
-st.set_page_config(page_title="Gerador Veo 3 - Versão Final", layout="wide")
+st.set_page_config(page_title="Gerador Veo 3 - Versão Sem Cortes", layout="wide")
 
 st.title("🎬 Gerador de Prompts para Veo 3")
-st.markdown("Geração de prompts completos a cada 8 segundos.")
+st.markdown("Configurado para gerar o roteiro COMPLETO sem resumir.")
 
 with st.sidebar:
     st.header("🔑 Configurações")
@@ -24,7 +24,7 @@ if st.button("Gerar Prompts") and audio_file and oa_key and cl_key:
         with open(temp_path, "wb") as f:
             f.write(audio_file.getbuffer())
         
-        st.info("⌛ OpenAI transcrevendo...")
+        st.info("⌛ Passo 1: Transcrevendo áudio total...")
         with open(temp_path, "rb") as f:
             transcript = client_oa.audio.transcriptions.create(
                 model="whisper-1", 
@@ -32,20 +32,32 @@ if st.button("Gerar Prompts") and audio_file and oa_key and cl_key:
                 response_format="text"
             )
 
-        # 2. Criação da Tabela com Claude
-        st.info("⌛ Claude criando tabela completa...")
+        # 2. Criação da Tabela com Claude Haiku
+        st.info("⌛ Passo 2: Claude gerando todos os prompts... (Isso pode demorar dependendo do tamanho do áudio)")
         client_cl = anthropic.Anthropic(api_key=cl_key)
         
-        # O bloco abaixo foi corrigido para evitar o erro de Syntax
-        prompt_final = f"Analise a transcrição COMPLETA abaixo e crie uma tabela de prompts sem pular nenhuma frase: '{transcript}'. REGRAS: 1. Divida em blocos de EXATAMENTE 8 segundos até o FINAL. 2. Estilo visual: {estilo}. 3. Prompts em INGLÊS. Formato: Tempo | Texto Original | Prompt Veo 3"
+        # PROMPT REFORÇADO PARA NÃO RESUMIR
+        prompt_final = f"""Você é um roteirista de cinema detalhista. Sua tarefa é transformar a transcrição abaixo em uma tabela de prompts de 8 segundos para o VEO 3.
+
+        TRANSCRICÃO PARA PROCESSAR: "{transcript}"
+
+        INSTRUÇÕES CRÍTICAS:
+        1. NÃO RESUMA. Se o áudio é longo, a tabela DEVE ser longa.
+        2. Crie uma linha para cada 8 segundos de áudio, do segundo 0 até o ÚLTIMO segundo da transcrição.
+        3. Se você parar antes de chegar ao fim do texto, você falhará na tarefa.
+        4. Mantenha o estilo: {estilo}.
+        5. Prompts em INGLÊS.
+
+        FORMATO EXIGIDO:
+        Tempo | Texto Original | Prompt Veo 3"""
 
         message = client_cl.messages.create(
             model="claude-3-haiku-20240307",
-            max_tokens=4000,
+            max_tokens=4000, # Espaço para uma resposta bem longa
             messages=[{"role": "user", "content": prompt_final}]
         )
 
-        st.success("✅ Tabela Gerada!")
+        st.success("✅ Tabela Completa Gerada!")
         st.markdown(message.content[0].text)
 
     except Exception as e:
