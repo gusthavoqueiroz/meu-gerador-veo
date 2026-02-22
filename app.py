@@ -3,7 +3,7 @@ import openai
 import anthropic
 import os
 
-st.set_page_config(page_title="Gerador Veo 3 - Estável", layout="wide")
+st.set_page_config(page_title="Gerador Veo 3 - Versão Final", layout="wide")
 
 st.title("🎬 Gerador de Prompts para Veo 3")
 
@@ -18,7 +18,7 @@ audio_file = st.file_uploader("Suba seu áudio (Máx 25MB)", type=['mp3', 'wav',
 if st.button("Gerar Prompts") and audio_file and oa_key and cl_key:
     temp_path = "temp_audio_file.mp3"
     try:
-        # 1. Transcrição com OpenAI (Whisper)
+        # 1. Transcrição com OpenAI
         client_oa = openai.OpenAI(api_key=oa_key)
         with open(temp_path, "wb") as f:
             f.write(audio_file.getbuffer())
@@ -28,10 +28,10 @@ if st.button("Gerar Prompts") and audio_file and oa_key and cl_key:
             transcript = client_oa.audio.transcriptions.create(
                 model="whisper-1", 
                 file=f,
-                response_format="text" # Simplificado para evitar erro de objeto
+                response_format="text"
             )
 
-        # 2. Criação da Tabela com Claude
+        # 2. Criação da Tabela com Claude (Usando ID de modelo fixo)
         st.info("⌛ Claude criando tabela...")
         client_cl = anthropic.Anthropic(api_key=cl_key)
         
@@ -46,7 +46,7 @@ if st.button("Gerar Prompts") and audio_file and oa_key and cl_key:
         Formate como Tabela: Tempo | Texto Original | Prompt Veo 3"""
 
         message = client_cl.messages.create(
-            model="claude-3-5-sonnet-latest",
+            model="claude-3-5-sonnet-20241022", # NOME FIXO PARA EVITAR ERRO 404
             max_tokens=4000,
             messages=[{"role": "user", "content": prompt_final}]
         )
