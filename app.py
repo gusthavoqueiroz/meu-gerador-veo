@@ -3,7 +3,7 @@ import openai
 import anthropic
 import os
 
-st.set_page_config(page_title="Gerador Veo 3 - Corrigido", layout="wide")
+st.set_page_config(page_title="Gerador Veo 3 - Final", layout="wide")
 
 st.title("🎬 Gerador de Prompts para Veo 3")
 
@@ -24,7 +24,6 @@ if st.button("Gerar Prompts") and audio_file and oa_key and cl_key:
         
         st.info("⌛ Transcrevendo áudio...")
         
-        # Abre o arquivo para leitura
         with open("temp_audio.mp3", "rb") as f:
             transcript = client_oa.audio.transcriptions.create(
                 model="whisper-1", 
@@ -36,7 +35,7 @@ if st.button("Gerar Prompts") and audio_file and oa_key and cl_key:
         st.info("⌛ Claude criando prompts de 8 segundos...")
         client_cl = anthropic.Anthropic(api_key=cl_key)
         
-        # CORREÇÃO DO ERRO: Acessando como objeto (.start) em vez de dicionário (['start'])
+        # Acesso via objeto (.start) corrigido
         texto_com_tempo = ""
         for s in transcript.segments:
             texto_com_tempo += f"[{s.start}-{s.end}s]: {s.text}\n"
@@ -51,8 +50,9 @@ if st.button("Gerar Prompts") and audio_file and oa_key and cl_key:
         3. Prompts em INGLÊS focando em movimento de câmera e iluminação.
         Formate como Tabela: Tempo | Texto Original | Prompt Veo 3"""
 
+        # MODELO ATUALIZADO PARA O MAIS RECENTE
         message = client_cl.messages.create(
-            model="claude-3-5-sonnet-20240620",
+            model="claude-3-5-sonnet-latest",
             max_tokens=4000,
             messages=[{"role": "user", "content": prompt_final}]
         )
