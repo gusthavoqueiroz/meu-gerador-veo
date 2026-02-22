@@ -1,56 +1,61 @@
 import streamlit as st
 import anthropic
 import base64
-import os
 
-st.set_page_config(page_title="Gerador Veo 3 - Versão Claude", layout="wide")
+st.set_page_config(page_title="Gerador Veo 3 - Final", layout="wide")
 
 st.title("🎬 Gerador de Prompts para Veo 3")
-st.markdown("Esta versão usa o Claude 3.5 Sonnet para ouvir seu áudio diretamente.")
 
 with st.sidebar:
     st.header("🔑 Configuração")
     cl_key = st.text_input("Claude API Key", type="password")
-    estilo = st.text_input("Estilo Visual", value="Cinematic, 8k, realistic, high detail")
+    estilo = st.text_input("Estilo Visual", value="Cinematic, 8k, realistic")
 
-# Claude aceita até 100MB
-audio_file = st.file_uploader("Suba seu áudio (MP3, WAV, M4A)", type=['mp3', 'wav', 'm4a'])
+audio_file = st.file_uploader("Suba seu áudio", type=['mp3', 'wav', 'm4a', 'mp4'])
 
 if st.button("Gerar Prompts") and audio_file and cl_key:
     try:
         client = anthropic.Anthropic(api_key=cl_key)
         
-        st.info("⌛ O Claude está ouvindo e processando seu áudio... Isso pode levar um minuto.")
+        st.info("⌛ O Claude está ouvindo seu áudio... Isso pode levar um minuto.")
         
-        # Converte o áudio para base64 para enviar ao Claude
-        audio_data = base64.b64encode(audio_file.read()).decode("utf-8")
-        audio_type = f"audio/{audio_file.name.split('.')[-1]}"
-        if "m4a" in audio_type: audio_type = "audio/mp4" # Ajuste para m4a
+        # Lê o arquivo e converte para base64
+        audio_raw = audio_file.read()
+        audio_base64 = base64.b64encode(audio_raw).decode("utf-8")
+        
+        # Define o tipo de mídia corretamente
+        mime_type = "audio/mpeg" # padrão para mp3
+        if audio_file.name.endswith("wav"): mime_type = "audio/wav"
+        elif audio_file.name.endswith("m4a") or audio_file.name.endswith("mp4"): mime_type = "audio/mp4"
 
-        prompt = f"""Analise este áudio e crie uma tabela de prompts para o gerador de vídeo VEO 3.
-        REGRAS:
-        1. Divida o conteúdo em blocos de EXATAMENTE 8 segundos (0-8s, 8-16s, 16-24s, etc).
-        2. Para cada bloco, descreva uma cena visual baseada no que é dito.
-        3. Estilo visual: {estilo}.
-        4. Os prompts devem estar em INGLÊS.
-        Formate como uma Tabela: Tempo | Descrição do Áudio | Prompt Veo 3"""
-
-        message = client.messages.create(
+        # Chamada com suporte a BETA de Áudio do Claude
+        message = client.beta.messages.create(
             model="claude-3-5-sonnet-latest",
             max_tokens=4000,
+            betas=["audio-2024-10-01"], # Ativa o suporte a áudio
             messages=[
                 {
                     "role": "user",
                     "content": [
-                        {"type": "document", "source": {"type": "base64", "media_type": audio_type, "data": audio_data}},
-                        {"type": "text", "text": prompt}
+                        {
+                            "type": "audio",
+                            "source": {
+                                "type": "base64",
+                                "media_type": mime_type,
+                                "data": audio_base64
+                            }
+                        },
+                        {
+                            "type": "text",
+                            "text": f"Analise este áudio e crie uma tabela de prompts para o gerador de vídeo VEO 3. Divida em blocos de 8 segundos. Estilo: {estilo}. Prompts em inglês. Formato: Tempo | Texto Original | Prompt Veo 3."
+                        }
                     ]
                 }
             ]
         )
 
-        st.success("✅ Tabela Gerada com Sucesso!")
+        st.success("✅ Tabela Gerada!")
         st.markdown(message.content[0].text)
 
     except Exception as e:
-        st.error(f"Erro no processamento: {e}")
+        st.error(f"Erro detalhado: {e}")
