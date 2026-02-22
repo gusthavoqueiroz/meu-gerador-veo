@@ -1,61 +1,61 @@
 import streamlit as st
+import openai
 import anthropic
-import base64
+import os
 
-st.set_page_config(page_title="Gerador Veo 3 - Final", layout="wide")
+st.set_page_config(page_title="Gerador Veo 3 - Estável", layout="wide")
 
 st.title("🎬 Gerador de Prompts para Veo 3")
 
 with st.sidebar:
-    st.header("🔑 Configuração")
-    cl_key = st.text_input("Claude API Key", type="password")
+    st.header("🔑 Configurações")
+    oa_key = st.text_input("OpenAI Key", type="password")
+    cl_key = st.text_input("Claude Key", type="password")
     estilo = st.text_input("Estilo Visual", value="Cinematic, 8k, realistic")
 
-audio_file = st.file_uploader("Suba seu áudio", type=['mp3', 'wav', 'm4a', 'mp4'])
+audio_file = st.file_uploader("Suba seu áudio (Máx 25MB)", type=['mp3', 'wav', 'm4a'])
 
-if st.button("Gerar Prompts") and audio_file and cl_key:
+if st.button("Gerar Prompts") and audio_file and oa_key and cl_key:
+    temp_path = "temp_audio_file.mp3"
     try:
-        client = anthropic.Anthropic(api_key=cl_key)
+        # 1. Transcrição com OpenAI (Whisper)
+        client_oa = openai.OpenAI(api_key=oa_key)
+        with open(temp_path, "wb") as f:
+            f.write(audio_file.getbuffer())
         
-        st.info("⌛ O Claude está ouvindo seu áudio... Isso pode levar um minuto.")
-        
-        # Lê o arquivo e converte para base64
-        audio_raw = audio_file.read()
-        audio_base64 = base64.b64encode(audio_raw).decode("utf-8")
-        
-        # Define o tipo de mídia corretamente
-        mime_type = "audio/mpeg" # padrão para mp3
-        if audio_file.name.endswith("wav"): mime_type = "audio/wav"
-        elif audio_file.name.endswith("m4a") or audio_file.name.endswith("mp4"): mime_type = "audio/mp4"
+        st.info("⌛ OpenAI transcrevendo...")
+        with open(temp_path, "rb") as f:
+            transcript = client_oa.audio.transcriptions.create(
+                model="whisper-1", 
+                file=f,
+                response_format="text" # Simplificado para evitar erro de objeto
+            )
 
-        # Chamada com suporte a BETA de Áudio do Claude
-        message = client.beta.messages.create(
+        # 2. Criação da Tabela com Claude
+        st.info("⌛ Claude criando tabela...")
+        client_cl = anthropic.Anthropic(api_key=cl_key)
+        
+        prompt_final = f"""Com base nesta transcrição de áudio:
+        "{transcript}"
+        
+        Crie uma tabela de prompts para o gerador de vídeo VEO 3.
+        REGRAS:
+        1. Divida em blocos de 8 segundos baseados no fluxo do texto.
+        2. Estilo visual: {estilo}.
+        3. Prompts em INGLÊS.
+        Formate como Tabela: Tempo | Texto Original | Prompt Veo 3"""
+
+        message = client_cl.messages.create(
             model="claude-3-5-sonnet-latest",
             max_tokens=4000,
-            betas=["audio-2024-10-01"], # Ativa o suporte a áudio
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "audio",
-                            "source": {
-                                "type": "base64",
-                                "media_type": mime_type,
-                                "data": audio_base64
-                            }
-                        },
-                        {
-                            "type": "text",
-                            "text": f"Analise este áudio e crie uma tabela de prompts para o gerador de vídeo VEO 3. Divida em blocos de 8 segundos. Estilo: {estilo}. Prompts em inglês. Formato: Tempo | Texto Original | Prompt Veo 3."
-                        }
-                    ]
-                }
-            ]
+            messages=[{"role": "user", "content": prompt_final}]
         )
 
-        st.success("✅ Tabela Gerada!")
+        st.success("✅ Tudo pronto!")
         st.markdown(message.content[0].text)
 
     except Exception as e:
-        st.error(f"Erro detalhado: {e}")
+        st.error(f"Erro: {e}")
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
