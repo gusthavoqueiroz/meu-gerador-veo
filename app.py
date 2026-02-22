@@ -3,41 +3,43 @@ import openai
 import anthropic
 import os
 
-st.set_page_config(page_title="Audio -> Veo 3 Prompts", layout="wide")
+st.set_page_config(page_title="Gerador Veo 3 - Corrigido", layout="wide")
 
-st.title("🎬 Gerador de Prompts para Veo 3 (8s)")
-st.markdown("Converta áudio em roteiros visuais segmentados.")
+st.title("🎬 Gerador de Prompts para Veo 3")
 
 with st.sidebar:
-    st.header("🔑 API Keys")
-    oa_key = st.text_input("OpenAI Key (para o áudio)", type="password")
-    cl_key = st.text_input("Claude Key (para os prompts)", type="password")
-    estilo = st.text_input("Estilo Visual", value="Cinematic, 8k, realistic, high detail")
+    st.header("🔑 Configurações")
+    oa_key = st.text_input("OpenAI Key", type="password")
+    cl_key = st.text_input("Claude Key", type="password")
+    estilo = st.text_input("Estilo Visual", value="Cinematic, 8k, realistic")
 
-audio_file = st.file_uploader("Suba o áudio aqui", type=['mp3', 'wav', 'm4a'])
+audio_file = st.file_uploader("Suba seu áudio (Máx 25MB)", type=['mp3', 'wav', 'm4a'])
 
 if st.button("Gerar Prompts") and audio_file and oa_key and cl_key:
     try:
-        # 1. Transcrição com OpenAI
         client_oa = openai.OpenAI(api_key=oa_key)
+        
         with open("temp_audio.mp3", "wb") as f:
             f.write(audio_file.getbuffer())
         
         st.info("⌛ Transcrevendo áudio...")
-        transcript = client_oa.audio.transcriptions.create(
-            model="whisper-1", 
-            file=open("temp_audio.mp3", "rb"),
-            response_format="verbose_json",
-            timestamp_granularities=["segment"]
-        )
+        
+        # Abre o arquivo para leitura
+        with open("temp_audio.mp3", "rb") as f:
+            transcript = client_oa.audio.transcriptions.create(
+                model="whisper-1", 
+                file=f,
+                response_format="verbose_json",
+                timestamp_granularities=["segment"]
+            )
 
-        # 2. Processamento com Claude
         st.info("⌛ Claude criando prompts de 8 segundos...")
         client_cl = anthropic.Anthropic(api_key=cl_key)
         
+        # CORREÇÃO DO ERRO: Acessando como objeto (.start) em vez de dicionário (['start'])
         texto_com_tempo = ""
         for s in transcript.segments:
-            texto_com_tempo += f"[{s['start']}-{s['end']}s]: {s['text']}\n"
+            texto_com_tempo += f"[{s.start}-{s.end}s]: {s.text}\n"
 
         prompt_final = f"""Com base nesta transcrição:
         {texto_com_tempo}
@@ -46,8 +48,7 @@ if st.button("Gerar Prompts") and audio_file and oa_key and cl_key:
         REGRAS:
         1. Divida em blocos de EXATAMENTE 8 segundos (0-8s, 8-16s, etc).
         2. Estilo visual: {estilo}.
-        3. Prompts em INGLÊS.
-        4. Foque em movimento de câmera e iluminação.
+        3. Prompts em INGLÊS focando em movimento de câmera e iluminação.
         Formate como Tabela: Tempo | Texto Original | Prompt Veo 3"""
 
         message = client_cl.messages.create(
@@ -58,8 +59,10 @@ if st.button("Gerar Prompts") and audio_file and oa_key and cl_key:
 
         st.success("✅ Pronto!")
         st.markdown(message.content[0].text)
+        
         os.remove("temp_audio.mp3")
 
     except Exception as e:
-
         st.error(f"Erro: {e}")
+        if os.path.exists("temp_audio.mp3"):
+            os.remove("temp_audio.mp3")
