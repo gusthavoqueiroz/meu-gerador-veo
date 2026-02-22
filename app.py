@@ -61,4 +61,5 @@ if st.button("Gerar Prompts") and audio_file and oa_key and cl_key:
         os.remove("temp_audio.mp3")
 
     except Exception as e:
+
         st.error(f"Erro: {e}")
