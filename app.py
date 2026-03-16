@@ -7,30 +7,75 @@ import csv
 import io
 import time
 import re
+import hashlib
 import pandas as pd
 
-st.set_page_config(page_title="Gerador Veo 3 - 30 Min", layout="wide")
+st.set_page_config(page_title="Gerador Veo 3 Pro", layout="wide")
 
-st.title("🎬 Gerador de Prompts Veo 3")
+st.title("🎬 Gerador de Prompts Veo 3 Pro")
 st.markdown("Gera prompts sincronizados em blocos de 8 segundos para vídeos longos.")
 
+# =========================
+# Sidebar
+# =========================
 with st.sidebar:
     st.header("🔑 Configurações")
+
     oa_key = st.text_input("OpenAI Key", type="password")
     cl_key = st.text_input("Claude Key", type="password")
 
-    estilo = st.text_area(
-        "Estilo Visual Global",
-        value="Cinematic, ultra realistic, high detail, natural lighting, realistic motion, film look, no text on screen"
+    estilo_preset = st.selectbox(
+        "Preset de estilo",
+        [
+            "Histórico documental",
+            "Bíblico cinematográfico",
+            "Cinemático realista",
+            "Personalizado"
+        ],
+        index=0
     )
 
-    model_claude = st.text_input(
+    if estilo_preset == "Histórico documental":
+        estilo = st.text_area(
+            "Estilo Visual Global",
+            value="Cinematic, ultra realistic, historical documentary style, dramatic lighting, realistic motion, film look, 8k detail, natural atmosphere, no text on screen"
+        )
+    elif estilo_preset == "Bíblico cinematográfico":
+        estilo = st.text_area(
+            "Estilo Visual Global",
+            value="Cinematic, ultra realistic, biblical epic style, dramatic golden lighting, realistic motion, ancient world atmosphere, film look, high detail, no text on screen"
+        )
+    elif estilo_preset == "Cinemático realista":
+        estilo = st.text_area(
+            "Estilo Visual Global",
+            value="Cinematic, ultra realistic, high detail, natural lighting, realistic motion, film look, no text on screen"
+        )
+    else:
+        estilo = st.text_area(
+            "Estilo Visual Global",
+            value="Cinematic, ultra realistic, high detail, natural lighting, realistic motion, film look, no text on screen"
+        )
+
+    model_claude = st.selectbox(
         "Modelo Claude",
-        value="claude-sonnet-4-5"
+        [
+            "claude-3-5-sonnet-latest",
+            "claude-3-7-sonnet-latest",
+            "claude-3-haiku-20240307"
+        ],
+        index=0
+    )
+
+    bloco_segundos = st.number_input(
+        "Duração de cada bloco (segundos)",
+        min_value=4,
+        max_value=20,
+        value=8,
+        step=1
     )
 
     blocos_por_lote = st.number_input(
-        "Blocos de 8s por lote",
+        "Blocos por lote",
         min_value=5,
         max_value=30,
         value=15,
@@ -53,15 +98,37 @@ with st.sidebar:
         step=500
     )
 
+    temperatura_prompts = st.slider(
+        "Criatividade dos prompts",
+        min_value=0.0,
+        max_value=1.0,
+        value=0.4,
+        step=0.1
+    )
+
 audio_file = st.file_uploader(
     "Suba seu áudio",
     type=["mp3", "wav", "m4a"]
 )
 
-# ---------------------------
-# Utilidades
-# ---------------------------
+# =========================
+# Session state
+# =========================
+if "final_df" not in st.session_state:
+    st.session_state.final_df = None
 
+if "raw_transcription" not in st.session_state:
+    st.session_state.raw_transcription = None
+
+if "blocks_data" not in st.session_state:
+    st.session_state.blocks_data = None
+
+if "transcript_cache" not in st.session_state:
+    st.session_state.transcript_cache = {}
+
+# =========================
+# Helpers
+# =========================
 def format_seconds(seconds: float) -> str:
     seconds = max(0, int(round(seconds)))
     m = seconds // 60
@@ -75,10 +142,13 @@ def normalize_text(text: str) -> str:
     text = re.sub(r"\s+", " ", text)
     return text
 
-def build_8s_blocks(segments, total_duration=None, block_size=8):
-    """
-    Cria blocos fixos de 8 segundos a partir dos segmentos transcritos.
-    """
+def hash_uploaded_file(uploaded_file) -> str:
+    uploaded_file.seek(0)
+    content = uploaded_file.read()
+    uploaded_file.seek(0)
+    return hashlib.md5(content).hexdigest()
+
+def build_fixed_blocks(segments, total_duration=None, block_size=8):
     if not segments:
         return []
 
@@ -92,17 +162,16 @@ def build_8s_blocks(segments, total_duration=None, block_size=8):
         start_t = i * block_size
         end_t = min((i + 1) * block_size, total_duration)
 
-        textos = []
+        texts = []
         for seg in segments:
             seg_start = float(seg["start"])
             seg_end = float(seg["end"])
             seg_text = normalize_text(seg["text"])
 
-            # Interseção do segmento com o bloco
             if seg_end > start_t and seg_start < end_t and seg_text:
-                textos.append(seg_text)
+                texts.append(seg_text)
 
-        joined_text = normalize_text(" ".join(textos))
+        joined_text = normalize_text(" ".join(texts))
         if not joined_text:
             joined_text = "[sem fala]"
 
@@ -117,13 +186,7 @@ def build_8s_blocks(segments, total_duration=None, block_size=8):
     return blocks
 
 def parse_csv_response(response_text: str):
-    """
-    Tenta interpretar o retorno do Claude no formato:
-    index;tempo;texto_original;prompt_veo3
-    """
     cleaned = response_text.strip()
-
-    # Remove fences de markdown se vierem
     cleaned = re.sub(r"^```(?:csv|text)?\s*", "", cleaned)
     cleaned = re.sub(r"\s*```$", "", cleaned)
 
@@ -135,12 +198,10 @@ def parse_csv_response(response_text: str):
         if not row:
             continue
 
-        # Ignora cabeçalho
         first = row[0].strip().lower()
         if first == "index":
             continue
 
-        # Junta colunas excedentes no prompt final
         if len(row) >= 4:
             idx = row[0].strip()
             tempo = row[1].strip()
@@ -157,35 +218,50 @@ def parse_csv_response(response_text: str):
 
     return rows
 
+def validate_batch_output(expected_blocks, parsed_rows):
+    expected_indexes = {b["index"] for b in expected_blocks}
+    valid_rows = []
+
+    for row in parsed_rows:
+        if row["index"] in expected_indexes and row["prompt_veo3"].strip():
+            valid_rows.append(row)
+
+    valid_indexes = {r["index"] for r in valid_rows}
+    missing = sorted(expected_indexes - valid_indexes)
+
+    dedup = {}
+    for row in valid_rows:
+        dedup[row["index"]] = row
+
+    valid_rows = [dedup[k] for k in sorted(dedup.keys())]
+    return valid_rows, missing
+
 def build_prompt_for_batch(blocks_batch, estilo_visual):
     blocos_txt = []
     for b in blocks_batch:
-        blocos_txt.append(
-            f"{b['index']} | {b['tempo']} | {b['texto_original']}"
-        )
+        blocos_txt.append(f"{b['index']} | {b['tempo']} | {b['texto_original']}")
 
     joined_blocks = "\n".join(blocos_txt)
 
     prompt = f"""
-You are an expert cinematic prompt writer for Veo 3.
+You are an expert cinematic Veo 3 prompt writer.
 
-Your task is to generate EXACTLY one video prompt in English for EACH block below.
+Your task is to generate EXACTLY one English video prompt for EACH block below.
 
-GLOBAL VISUAL STYLE:
+GLOBAL STYLE:
 {estilo_visual}
 
-IMPORTANT RULES:
+RULES:
 1. Return EXACTLY one line per block.
 2. Do not skip any block.
-3. Do not merge multiple blocks into one line.
-4. The prompt must be in English.
-5. The original text may remain in the source language.
-6. The prompt must visually match the narration in that exact time interval.
-7. No subtitles, no on-screen text, no captions, no logos, no watermarks.
-8. Focus on cinematic, realistic, visually clear, filmable scenes.
-9. If the block has very little speech or says [sem fala], still create a relevant visual prompt.
-10. Keep each prompt detailed but concise enough to fit safely in one CSV row.
-11. Return ONLY valid CSV with semicolon separator in this exact format:
+3. Do not merge multiple blocks.
+4. Keep the prompt in English.
+5. Match the narration of that exact time interval.
+6. No subtitles, no on-screen text, no logos, no watermarks.
+7. Make the scene realistic, cinematic, visually clear, and suitable for AI video generation.
+8. If the block says [sem fala], create a cinematic transition, atmosphere shot, environmental shot, or contextual visual.
+9. Return ONLY CSV using semicolon separators.
+10. Use this exact format:
 
 index;tempo;texto_original;prompt_veo3
 
@@ -195,43 +271,7 @@ BLOCKS:
 
     return prompt
 
-def call_claude_batch(client_cl, blocks_batch, estilo_visual, model_name, max_tokens):
-    prompt = build_prompt_for_batch(blocks_batch, estilo_visual)
-
-    response = client_cl.messages.create(
-        model=model_name,
-        max_tokens=int(max_tokens),
-        messages=[
-            {"role": "user", "content": prompt}
-        ]
-    )
-
-    # Junta blocos de texto se vier mais de um
-    parts = []
-    for item in response.content:
-        if getattr(item, "type", None) == "text":
-            parts.append(item.text)
-
-    return "\n".join(parts).strip()
-
-def validate_batch_output(expected_blocks, parsed_rows):
-    expected_indexes = {b["index"] for b in expected_blocks}
-    returned_indexes = {r["index"] for r in parsed_rows}
-
-    missing = sorted(expected_indexes - returned_indexes)
-
-    # Também filtra linhas vazias ou ruins
-    valid_rows = []
-    for row in parsed_rows:
-        if row["index"] in expected_indexes and row["prompt_veo3"].strip():
-            valid_rows.append(row)
-
-    valid_indexes = {r["index"] for r in valid_rows}
-    missing = sorted(expected_indexes - valid_indexes)
-
-    return valid_rows, missing
-
-def generate_missing_only_prompt(missing_blocks, estilo_visual):
+def build_retry_prompt(missing_blocks, estilo_visual):
     blocos_txt = []
     for b in missing_blocks:
         blocos_txt.append(f"{b['index']} | {b['tempo']} | {b['texto_original']}")
@@ -239,35 +279,33 @@ def generate_missing_only_prompt(missing_blocks, estilo_visual):
     joined_blocks = "\n".join(blocos_txt)
 
     prompt = f"""
-Generate EXACTLY one Veo 3 video prompt in English for EACH missing block below.
+Generate EXACTLY one English Veo 3 video prompt for EACH block below.
 
-GLOBAL VISUAL STYLE:
+GLOBAL STYLE:
 {estilo_visual}
 
 RULES:
 1. Return EXACTLY one line per block.
 2. Do not skip any block.
-3. Do not add commentary.
+3. No extra commentary.
 4. No subtitles, no on-screen text, no logos, no watermarks.
-5. Return ONLY CSV with semicolon separator in this exact format:
+5. Return ONLY CSV using semicolon separators.
+6. Use this exact format:
 
 index;tempo;texto_original;prompt_veo3
 
-MISSING BLOCKS:
+BLOCKS:
 {joined_blocks}
 """.strip()
 
     return prompt
 
-def retry_missing_blocks(client_cl, missing_blocks, estilo_visual, model_name, max_tokens):
-    prompt = generate_missing_only_prompt(missing_blocks, estilo_visual)
-
+def call_claude(client_cl, prompt, model_name, max_tokens, temperature):
     response = client_cl.messages.create(
         model=model_name,
         max_tokens=int(max_tokens),
-        messages=[
-            {"role": "user", "content": prompt}
-        ]
+        temperature=temperature,
+        messages=[{"role": "user", "content": prompt}]
     )
 
     parts = []
@@ -275,35 +313,31 @@ def retry_missing_blocks(client_cl, missing_blocks, estilo_visual, model_name, m
         if getattr(item, "type", None) == "text":
             parts.append(item.text)
 
-    text = "\n".join(parts).strip()
-    return parse_csv_response(text)
+    return "\n".join(parts).strip()
 
 def dataframe_to_csv_string(df: pd.DataFrame) -> str:
     output = io.StringIO()
     df.to_csv(output, sep=";", index=False)
     return output.getvalue()
 
-# ---------------------------
-# Estado
-# ---------------------------
+def dataframe_to_excel_bytes(df: pd.DataFrame) -> bytes:
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="prompts")
+    return output.getvalue()
 
-if "final_df" not in st.session_state:
-    st.session_state.final_df = None
-
-if "raw_transcription" not in st.session_state:
-    st.session_state.raw_transcription = None
-
-# ---------------------------
-# Execução principal
-# ---------------------------
-
+# =========================
+# Main action
+# =========================
 if st.button("Gerar Prompts"):
     if not audio_file:
         st.error("Envie um áudio.")
         st.stop()
+
     if not oa_key:
         st.error("Informe a OpenAI Key.")
         st.stop()
+
     if not cl_key:
         st.error("Informe a Claude Key.")
         st.stop()
@@ -311,36 +345,57 @@ if st.button("Gerar Prompts"):
     temp_path = f"temp_{audio_file.name}"
 
     try:
-        with open(temp_path, "wb") as f:
-            f.write(audio_file.getbuffer())
+        file_hash = hash_uploaded_file(audio_file)
 
-        st.info("⌛ Passo 1: Transcrevendo áudio com timestamps...")
-        client_oa = openai.OpenAI(api_key=oa_key)
+        if file_hash in st.session_state.transcript_cache:
+            cached = st.session_state.transcript_cache[file_hash]
+            segments = cached["segments"]
+            total_duration = cached["duration"]
+            full_text = cached["text"]
+            st.info("♻️ Usando transcrição em cache.")
+        else:
+            with open(temp_path, "wb") as f:
+                f.write(audio_file.getbuffer())
 
-        with open(temp_path, "rb") as f:
-            transcript = client_oa.audio.transcriptions.create(
-                model="whisper-1",
-                file=f,
-                response_format="verbose_json",
-                timestamp_granularities=["segment"]
-            )
+            st.info("⌛ Passo 1: Transcrevendo áudio com timestamps...")
+            client_oa = openai.OpenAI(api_key=oa_key)
 
-        # A API retorna segmentos com start/end/text nesse formato verbose_json
-        segments = []
-        for seg in transcript.segments:
-            segments.append({
-                "start": float(seg.start),
-                "end": float(seg.end),
-                "text": seg.text
-            })
+            with open(temp_path, "rb") as f:
+                transcript = client_oa.audio.transcriptions.create(
+                    model="whisper-1",
+                    file=f,
+                    response_format="verbose_json",
+                    timestamp_granularities=["segment"]
+                )
 
-        total_duration = float(getattr(transcript, "duration", 0) or 0)
-        blocks = build_8s_blocks(segments, total_duration=total_duration, block_size=8)
+            segments = []
+            for seg in transcript.segments:
+                segments.append({
+                    "start": float(seg.start),
+                    "end": float(seg.end),
+                    "text": seg.text
+                })
 
-        st.session_state.raw_transcription = getattr(transcript, "text", "")
+            total_duration = float(getattr(transcript, "duration", 0) or 0)
+            full_text = getattr(transcript, "text", "")
+
+            st.session_state.transcript_cache[file_hash] = {
+                "segments": segments,
+                "duration": total_duration,
+                "text": full_text
+            }
+
+        blocks = build_fixed_blocks(
+            segments=segments,
+            total_duration=total_duration,
+            block_size=bloco_segundos
+        )
+
+        st.session_state.raw_transcription = full_text
+        st.session_state.blocks_data = blocks
 
         st.success(f"✅ Transcrição concluída. Duração detectada: {format_seconds(total_duration)}")
-        st.write(f"Total de blocos de 8 segundos: **{len(blocks)}**")
+        st.write(f"Total de blocos: **{len(blocks)}**")
 
         st.info("⌛ Passo 2: Gerando prompts em lotes...")
         client_cl = anthropic.Anthropic(api_key=cl_key)
@@ -361,15 +416,15 @@ if st.button("Gerar Prompts"):
             parsed_rows = []
             missing = [b["index"] for b in batch]
 
-            # Tentativa principal + retries
             for attempt in range(1, int(tentativas_por_lote) + 1):
                 if attempt == 1:
-                    raw_text = call_claude_batch(
+                    prompt = build_prompt_for_batch(batch, estilo)
+                    raw_text = call_claude(
                         client_cl=client_cl,
-                        blocks_batch=batch,
-                        estilo_visual=estilo,
+                        prompt=prompt,
                         model_name=model_claude,
-                        max_tokens=max_tokens_saida
+                        max_tokens=max_tokens_saida,
+                        temperature=temperatura_prompts
                     )
                     parsed_rows = parse_csv_response(raw_text)
                 else:
@@ -377,17 +432,18 @@ if st.button("Gerar Prompts"):
                     if not missing_blocks:
                         break
 
-                    retry_rows = retry_missing_blocks(
+                    retry_prompt = build_retry_prompt(missing_blocks, estilo)
+                    retry_text = call_claude(
                         client_cl=client_cl,
-                        missing_blocks=missing_blocks,
-                        estilo_visual=estilo,
+                        prompt=retry_prompt,
                         model_name=model_claude,
-                        max_tokens=max_tokens_saida
+                        max_tokens=max_tokens_saida,
+                        temperature=temperatura_prompts
                     )
+                    retry_rows = parse_csv_response(retry_text)
                     parsed_rows.extend(retry_rows)
 
                 valid_rows, missing = validate_batch_output(batch, parsed_rows)
-
                 if not missing:
                     parsed_rows = valid_rows
                     break
@@ -396,14 +452,13 @@ if st.button("Gerar Prompts"):
 
             valid_rows, missing = validate_batch_output(batch, parsed_rows)
 
-            # Se ainda faltar, cria fallback simples para não perder sincronização
             if missing:
                 missing_blocks = [b for b in batch if b["index"] in missing]
                 for mb in missing_blocks:
                     fallback_prompt = (
-                        f"Cinematic realistic scene visually representing the narration for this moment, "
-                        f"matching the context '{mb['texto_original']}', natural motion, filmic composition, "
-                        f"high detail, no on-screen text, no logos, no watermark."
+                        f"Cinematic realistic scene representing the narration at this moment, "
+                        f"showing the context of '{mb['texto_original']}', filmic composition, "
+                        f"realistic motion, high detail, natural atmosphere, no on-screen text, no logos, no watermark."
                     )
                     valid_rows.append({
                         "index": mb["index"],
@@ -412,18 +467,15 @@ if st.button("Gerar Prompts"):
                         "prompt_veo3": fallback_prompt
                     })
 
-            # Salva por índice para evitar duplicados
             for row in valid_rows:
                 all_rows_map[row["index"]] = row
 
             progress_bar.progress((lote_idx + 1) / total_lotes)
 
-        # Ordena tudo
         final_rows = [all_rows_map[k] for k in sorted(all_rows_map.keys())]
         final_df = pd.DataFrame(final_rows)
 
         st.session_state.final_df = final_df
-
         st.success("✅ Processo concluído com sucesso.")
 
     except Exception as e:
@@ -433,23 +485,47 @@ if st.button("Gerar Prompts"):
         if os.path.exists(temp_path):
             os.remove(temp_path)
 
-# ---------------------------
-# Exibição dos resultados
-# ---------------------------
-
+# =========================
+# Results
+# =========================
 if st.session_state.final_df is not None:
     df = st.session_state.final_df
 
     st.subheader("Resultado final")
     st.dataframe(df, use_container_width=True, height=500)
 
+    c1, c2, c3 = st.columns(3)
+
+    with c1:
+        st.metric("Total de prompts", len(df))
+
+    with c2:
+        if st.session_state.blocks_data:
+            st.metric("Total de blocos", len(st.session_state.blocks_data))
+
+    with c3:
+        cobertura = 0
+        if st.session_state.blocks_data:
+            total_blocos = len(st.session_state.blocks_data)
+            if total_blocos > 0:
+                cobertura = round((len(df) / total_blocos) * 100, 1)
+        st.metric("Cobertura", f"{cobertura}%")
+
     csv_data = dataframe_to_csv_string(df)
+    excel_data = dataframe_to_excel_bytes(df)
 
     st.download_button(
         label="📥 Baixar CSV",
         data=csv_data,
         file_name="prompts_veo3_8s.csv",
         mime="text/csv"
+    )
+
+    st.download_button(
+        label="📥 Baixar XLSX",
+        data=excel_data,
+        file_name="prompts_veo3_8s.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
     txt_output = []
